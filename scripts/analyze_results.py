@@ -29,6 +29,15 @@ TELEMETRY_METRICS = {
     "voltage_abs_error_pct": ("DT Voltage Absolute Error", "%"),
     "aoi_s": ("Age of Information", "s"),
 }
+PLOT_COLORS = [
+    "#6B8E9F",
+    "#87A878",
+    "#C49A6C",
+    "#9A86A4",
+    "#C47F7F",
+    "#709FB0",
+]
+PLOT_MARKERS = ["o", "s", "^", "D", "v", "P"]
 
 
 def sha256_file(path: Path) -> str:
@@ -154,22 +163,24 @@ def read_telemetry(root: Path, consumed: set[Path]) -> list[dict]:
                 received_time = float(dt_row["ts_received"])
             except (KeyError, TypeError, ValueError):
                 continue
-            bus = key[1]
+            line = (dt_row.get("line") or "").strip()
+            if not line:
+                continue
             absolute_error = abs(dt_voltage - sent_voltage)
-            grouped[(scenario, bus, "voltage_abs_error_pu")].append(absolute_error)
+            grouped[(scenario, line, "voltage_abs_error_pu")].append(absolute_error)
             if abs(sent_voltage) > 1e-12:
-                grouped[(scenario, bus, "voltage_abs_error_pct")].append(
+                grouped[(scenario, line, "voltage_abs_error_pct")].append(
                     absolute_error / abs(sent_voltage) * 100.0
                 )
-            grouped[(scenario, bus, "aoi_s")].append(max(0.0, received_time - sent_time))
+            grouped[(scenario, line, "aoi_s")].append(max(0.0, received_time - sent_time))
 
     rows = []
-    for (scenario, bus, metric), values in sorted(grouped.items()):
+    for (scenario, line, metric), values in sorted(grouped.items()):
         title, unit = TELEMETRY_METRICS[metric]
         rows.append(
             {
                 "scenario": scenario,
-                "bus": bus,
+                "line": line,
                 "metric": metric,
                 "label": title,
                 "unit": unit,
@@ -194,7 +205,14 @@ def scenario_sort_key(name: str) -> tuple[int, str]:
         return len(SCENARIO_ORDER), name
 
 
-def plot_grouped(rows: list[dict], metric: str, series_column: str, output: Path) -> None:
+def series_sort_key(name: str) -> tuple[int, int | str]:
+    try:
+        return 0, int(name)
+    except ValueError:
+        return 1, name
+
+
+def plot_summary_lines(rows: list[dict], metric: str, series_column: str, output: Path) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -204,39 +222,82 @@ def plot_grouped(rows: list[dict], metric: str, series_column: str, output: Path
     if not selected:
         return
     scenarios = sorted({row["scenario"] for row in selected}, key=scenario_sort_key)
-    series = sorted({str(row[series_column]) for row in selected})
+    series = sorted({str(row[series_column]) for row in selected}, key=series_sort_key)
     indexed = {(row["scenario"], str(row[series_column])): row for row in selected}
-    width = min(0.8 / max(1, len(series)), 0.32)
     positions = list(range(len(scenarios)))
 
-    figure, axis = plt.subplots(figsize=(10.5, 6), dpi=160)
-    colors = plt.get_cmap("tab10")
+    figure, axis = plt.subplots(figsize=(11.5, 6.1), dpi=160)
+    figure.patch.set_facecolor("#F8FAFC")
+    axis.set_facecolor("#FFFFFF")
     for index, series_name in enumerate(series):
-        x_values = [
-            position + (index - (len(series) - 1) / 2) * width for position in positions
+        points = [
+            (position, indexed[(scenario, series_name)])
+            for position, scenario in zip(positions, scenarios)
+            if (scenario, series_name) in indexed
         ]
-        means = [indexed.get((scenario, series_name), {}).get("mean", 0.0) for scenario in scenarios]
-        errors = [indexed.get((scenario, series_name), {}).get("std_dev", 0.0) for scenario in scenarios]
-        axis.bar(
+        if not points:
+            continue
+        x_values = [position for position, _row in points]
+        means = [row["mean"] for _position, row in points]
+        errors = [row["std_dev"] for _position, row in points]
+        label_prefix = "Line" if series_column == "line" else ""
+        label = f"{label_prefix} {series_name}".strip()
+        axis.errorbar(
             x_values,
             means,
-            width,
             yerr=errors,
             capsize=4,
-            color=colors(index % 10),
-            label=series_name,
+            marker=PLOT_MARKERS[index % len(PLOT_MARKERS)],
+            markersize=6,
+            linewidth=2.1,
+            color=PLOT_COLORS[index % len(PLOT_COLORS)],
+            label=label,
         )
 
     sample = selected[0]
     title = sample.get("label", metric)
-    axis.set_title(f"{title} by Scenario")
-    axis.set_ylabel(f"{title} ({sample['unit']})")
+    axis.set_title(
+        f"{title} by Scenario",
+        fontsize=15,
+        fontweight="bold",
+        color="#0F172A",
+        pad=14,
+    )
+    axis.set_xlabel("Test Scenario", fontsize=11, fontweight="semibold", color="#334155")
+    axis.set_ylabel(
+        f"{title} ({sample['unit']})",
+        fontsize=11,
+        fontweight="semibold",
+        color="#334155",
+    )
     axis.set_xticks(positions)
     axis.set_xticklabels([SCENARIO_LABELS.get(name, name) for name in scenarios])
-    axis.grid(axis="y", linestyle="--", alpha=0.35)
+    axis.set_xlim(-0.25, max(positions) + 0.25)
+    axis.set_ylim(bottom=0)
+    axis.grid(axis="both", linestyle="--", linewidth=0.8, alpha=0.45, color="#94A3B8")
     axis.set_axisbelow(True)
-    axis.legend(title=series_column.replace("_", " ").title())
-    figure.tight_layout()
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+    axis.spines["left"].set_color("#CBD5E1")
+    axis.spines["bottom"].set_color("#CBD5E1")
+    axis.tick_params(axis="both", colors="#334155")
+    axis.legend(
+        title=series_column.replace("_", " ").title(),
+        frameon=True,
+        facecolor="#FFFFFF",
+        edgecolor="#CBD5E1",
+        fontsize=9,
+        title_fontsize=10,
+        loc="best",
+    )
+    figure.text(
+        0.01,
+        0.015,
+        "Points show summary means; error bars show standard deviation.",
+        fontsize=9,
+        color="#475569",
+    )
+    figure.tight_layout(rect=(0, 0.035, 1, 1))
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, bbox_inches="tight")
     plt.close(figure)
@@ -315,7 +376,7 @@ def main() -> int:
     write_csv(
         telemetry_csv,
         telemetry_rows,
-        ["scenario", "bus", "metric", "label", "unit", "n", "mean", "std_dev", "min", "max"],
+        ["scenario", "line", "metric", "label", "unit", "n", "mean", "std_dev", "min", "max"],
     )
     write_inventory(root, output_path / "run_inventory.csv", consumed)
 
@@ -324,13 +385,17 @@ def main() -> int:
         for row in network_rows:
             if row["metric"] == metric:
                 route_rows.append({**row, "route": f"{row['layer']} ({row['source']}→{row['destination']})", "label": metric})
+        for route_row in route_rows:
+            route_row["route"] = (
+                f"{route_row['layer']} ({route_row['source']} -> {route_row['destination']})"
+            )
         filename = metric.lower().replace(" ", "_") + ".png"
-        plot_grouped(route_rows, metric, "route", output_path / "figures" / filename)
+        plot_summary_lines(route_rows, metric, "route", output_path / "figures" / filename)
     for metric in sorted({row["metric"] for row in telemetry_rows}):
-        plot_grouped(
+        plot_summary_lines(
             telemetry_rows,
             metric,
-            "bus",
+            "line",
             output_path / "figures" / f"{metric}.png",
         )
 
