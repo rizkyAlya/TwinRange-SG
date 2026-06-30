@@ -96,10 +96,17 @@ sudo .venv/bin/python scripts/run_experiment.py --config configs/experiments/mit
 sudo .venv/bin/python scripts/run_experiment.py --config configs/experiments/dos.yaml
 ```
 
+Run every recipe under `configs/experiments/` sequentially:
+
+```bash
+sudo .venv/bin/python scripts/run_experiment.py --all
+```
+
 Validate a configuration without Mininet or root access:
 
 ```bash
 python scripts/run_experiment.py --config configs/experiments/baseline.yaml --dry-run
+python scripts/run_experiment.py --all --dry-run
 ```
 
 ## Output files
