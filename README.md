@@ -45,7 +45,7 @@ configs/
 scripts/                 Public run and analysis commands
 ```
 
-The generated `script/` directory and runtime `results/` directory are created automatically and are not tracked by Git. The `scripts/` directory contains user-facing commands, while `script/` contains generated runtime files such as the Mininet topology, host applications, and MITM proxy code.
+The generated `generated/` directory and runtime `results/` directory are created automatically and are not tracked by Git. The `scripts/` directory contains user-facing commands, while `generated/` contains generated runtime files such as the Mininet topology, host applications, and MITM proxy code.
 
 ## Quick start
 
@@ -148,22 +148,6 @@ TwinRange-SG supports analysis of communication-level and Field–Digital Twin m
 * Voltage error
 * Field–Digital Twin telemetry deviation
 * Scenario-level run inventory and reproducibility metadata
-
-## Creating a new experiment
-
-New experiments can be added by creating a YAML configuration file under `configs/experiments/`. A configuration defines the scenario settings, selected topology, attack parameters, logging options, seeds, and runtime parameters.
-
-After creating a new configuration, validate it first:
-
-```bash
-python scripts/run_experiment.py --config configs/experiments/<new_experiment>.yaml --dry-run
-```
-
-Then run it with Mininet:
-
-```bash
-sudo .venv/bin/python scripts/run_experiment.py --config configs/experiments/<new_experiment>.yaml
-```
 
 ## Reproducibility
 
