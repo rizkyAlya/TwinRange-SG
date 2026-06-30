@@ -1,0 +1,22 @@
+schema_version: 1
+name: baseline
+topology_config: ../topology.yaml
+output_dir: ../../results/raw
+
+scenario:
+  baseline: true
+  mitm: false
+  dos: false
+
+execution:
+  interactive_cli: false
+  capture_pcap: true
+  collect_delay_s: 5
+  measurement_iterations: 3
+  measurement_window_s: 20
+  app_warmup_s: 5
+  normal_phase_duration_s: 5
+
+environment:
+  FIELD_RANDOM_SEED: 42
+  RTU_NOISE_SEED: 7

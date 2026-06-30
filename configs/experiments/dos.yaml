@@ -1,0 +1,23 @@
+schema_version: 1
+name: dos
+topology_config: ../topology.yaml
+output_dir: ../../results/raw
+
+scenario:
+  baseline: false
+  mitm: false
+  dos: true
+
+execution:
+  interactive_cli: false
+  capture_pcap: true
+  measurement_iterations: 3
+  measurement_window_s: 20
+  app_warmup_s: 5
+  dos_modes:
+    - light
+    - heavy
+
+environment:
+  FIELD_RANDOM_SEED: 42
+  RTU_NOISE_SEED: 7

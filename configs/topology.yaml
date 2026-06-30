@@ -1,0 +1,32 @@
+topology:
+  zones:
+    field:
+      subnet: 10.0.1.0/24
+      hosts:
+        - name: h1
+          role: field
+        - name: h2
+          role: rtu
+
+    control:
+      subnet: 10.0.2.0/24
+      hosts:
+        - name: h3
+          role: gateway
+        - name: h5
+          role: attacker
+
+    it:
+      subnet: 10.0.3.0/24
+      hosts:
+        - name: h4
+          role: dt
+
+  links:
+    - [h1, h2]
+    - [h2, h3]
+    - [h3, h4]
+    - [h3, h5]
+
+network:
+  bandwidth: 5

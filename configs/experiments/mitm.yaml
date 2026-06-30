@@ -1,0 +1,26 @@
+schema_version: 1
+name: mitm
+topology_config: ../topology.yaml
+output_dir: ../../results/raw
+
+scenario:
+  baseline: false
+  mitm: true
+  dos: false
+
+execution:
+  interactive_cli: false
+  capture_pcap: true
+  measurement_iterations: 3
+  measurement_window_s: 20
+  app_warmup_s: 5
+  normal_phase_duration_s: 5
+
+environment:
+  FIELD_RANDOM_SEED: 42
+  RTU_NOISE_SEED: 7
+  MITM_FIXED_SEED: 424242
+  MITM_I_FACTOR: 1.5
+  MITM_ATTACK_ON_SECONDS: 5.0
+  MITM_ATTACK_OFF_SECONDS: 5.0
+  MITM_MODIFY_PROBABILITY: 0.5

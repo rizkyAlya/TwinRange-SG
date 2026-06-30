@@ -1,0 +1,256 @@
+import os
+import sys
+import time
+import math
+import json
+from datetime import datetime
+from threading import Thread
+
+from opcua import Server
+from pymodbus.server import StartTcpServer
+from pymodbus.datastore import ModbusSlaveContext, ModbusServerContext
+from pymodbus.datastore import ModbusSequentialDataBlock
+
+# Konfigurasi server OPC UA
+server = Server()
+server.set_endpoint("opc.tcp://10.0.2.2:4840/mininet/")
+
+uri = "mininet-opcua"
+idx = server.register_namespace(uri)
+
+objects = server.get_objects_node()
+
+sensor_folder = objects.add_folder(idx, "SENSORS")
+command_folder = objects.add_folder(idx, "COMMANDS")
+
+p_nodes = {}
+q_nodes = {}
+v_dt_nodes = {}
+brk_fb_nodes = {}
+command_nodes = {}
+
+last_breaker = {}
+
+
+def _measurement_trusted(v_pu, i_amp):
+    return v_pu >= V_MIN_PU_OPC and i_amp >= I_MIN_A_OPC
+
+
+# Modbus gateway datastore:
+# - Holding registers:
+#   0-4   : V bus
+#   10-14 : I bus
+#   20-24 : breaker feedback dari RTU (status switch field)
+#   30-34 : PF per bus dari field (via RTU)
+#   OPC BRK_FB_bus_* : diteruskan ke DT untuk sinkron topologi
+# - Coils:
+#   0-4   : breaker command ke RTU
+MODBUS_LISTEN_IP = "0.0.0.0"
+MODBUS_PORT = 5020
+V_BASE_ADDR = 0
+I_BASE_ADDR = 10
+BREAKER_FB_BASE_ADDR = 20
+PF_FB_BASE_ADDR = 30
+BREAKER_CMD_BASE_ADDR = 0
+DATA_CYCLE_ADDR = 90
+CMD_ID_ADDR = 91
+ORIGIN_CYCLE_ADDR = 92
+LOOP_INTERVAL_S = float(os.environ.get("GATEWAY_LOOP_INTERVAL_S", "1"))
+V_SCALE = 1000
+I_SCALE = 30
+PF_SCALE = 10000
+NUM_BUS = 5
+V_BASE = 110e3
+# Di bawah ambang ini V/I dianggap tidak valid; P/Q OPC tidak di-overwrite (tahan nilai terakhir).
+V_MIN_PU_OPC = float(os.environ.get("GATEWAY_V_MIN_PU_OPC", "0.05"))
+I_MIN_A_OPC = float(os.environ.get("GATEWAY_I_MIN_A_OPC", "5.0"))
+last_pq_mw = {bus: 0.0 for bus in range(1, NUM_BUS + 1)}
+last_q_mvar = {bus: 0.0 for bus in range(1, NUM_BUS + 1)}
+# Data V/I/PF dari holding register Modbus (RTU dari field).
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.append(BASE_DIR)
+from src.logger.host_csv_logger import breaker_state, log_control_plane, log_data_plane, timestamp
+
+store = ModbusSlaveContext(
+    di=ModbusSequentialDataBlock(0, [0] * 100),
+    co=ModbusSequentialDataBlock(0, [1] * 100),
+    hr=ModbusSequentialDataBlock(0, [0] * 100),
+    ir=ModbusSequentialDataBlock(0, [0] * 100),
+)
+context = ModbusServerContext(slaves=store, single=True)
+
+def start_modbus_server():
+    print(f"Memulai Modbus Gateway di {MODBUS_LISTEN_IP}:{MODBUS_PORT}")
+    StartTcpServer(context=context, identity=None, address=(MODBUS_LISTEN_IP, MODBUS_PORT))
+
+
+for bus in range(1, 6):
+    p_nodes[bus] = sensor_folder.add_variable(idx, f"P_bus_{bus}", 0.0)   # MW
+    p_nodes[bus].set_writable()
+
+    q_nodes[bus] = sensor_folder.add_variable(idx, f"Q_bus_{bus}", 0.0)   # MVar
+    q_nodes[bus].set_writable()
+
+    # Diisi oleh DT (h4) agar gateway bisa logging V_DT per bus.
+    v_dt_nodes[bus] = sensor_folder.add_variable(idx, f"V_DT_bus_{bus}", 1.0)   # pu
+    v_dt_nodes[bus].set_writable()
+
+    brk_fb_nodes[bus] = sensor_folder.add_variable(idx, f"BRK_FB_bus_{bus}", 1)
+    brk_fb_nodes[bus].set_writable()
+
+    command_nodes[bus] = command_folder.add_variable(idx, f"CMD_bus_{bus}", 1)
+    command_nodes[bus].set_writable()
+
+    last_breaker[bus] = 1
+
+data_cycle_node = sensor_folder.add_variable(idx, "DATA_cycle", 0)
+data_cycle_node.set_writable()
+
+data_queue_node = sensor_folder.add_variable(idx, "DATA_queue", "[]")
+data_queue_node.set_writable()
+
+cmd_id_node = command_folder.add_variable(idx, "CMD_id", 0)
+cmd_id_node.set_writable()
+
+origin_cycle_node = command_folder.add_variable(idx, "ORIGIN_cycle", 0)
+origin_cycle_node.set_writable()
+
+print("Memulai Server OPC UA")
+server.start()
+t = Thread(target=start_modbus_server, daemon=True)
+t.start()
+
+_gateway_measure_iter = 0
+data_history = []
+last_snapshot_cycle = None
+DATA_HISTORY_MAX = int(os.environ.get("GATEWAY_DATA_HISTORY_MAX", "200"))
+
+try:
+    while True:
+        _gateway_measure_iter += 1
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        t_iter = time.monotonic()
+
+        print(f"\n[{ts}] [iter {_gateway_measure_iter}] realtime transfer")
+        cycle_id = int(context[0x00].getValues(3, DATA_CYCLE_ADDR, count=1)[0])
+        data_cycle_node.set_value(int(cycle_id))
+        control_ts_received = timestamp()
+        cmd_id = int(cmd_id_node.get_value())
+        origin_cycle = int(origin_cycle_node.get_value())
+        breaker_cmd = dict(last_breaker)
+        snapshot_p = {}
+        snapshot_q = {}
+        snapshot_brk = {}
+        for bus in range(1, NUM_BUS + 1):
+            cmd_val = last_breaker[bus]
+            try:
+                ts_received = timestamp()
+                addr_v = V_BASE_ADDR + (bus - 1)
+                addr_i = I_BASE_ADDR + (bus - 1)
+                addr_pf = PF_FB_BASE_ADDR + (bus - 1)
+                addr_b = BREAKER_FB_BASE_ADDR + (bus - 1)
+                v_raw_reg = context[0x00].getValues(3, addr_v, count=1)[0]
+                i_raw_reg = context[0x00].getValues(3, addr_i, count=1)[0]
+                pf_raw_reg = context[0x00].getValues(3, addr_pf, count=1)[0]
+                b_raw = context[0x00].getValues(3, addr_b, count=1)[0]
+                v_raw = float(v_raw_reg) / V_SCALE
+                i_raw = float(i_raw_reg) / I_SCALE
+                pf_raw = float(pf_raw_reg) / PF_SCALE
+                breaker_fb = 1 if int(b_raw) == 1 else 0
+
+                pf = min(1.0, max(1e-6, pf_raw))
+                v_real = v_raw * V_BASE
+                s_va = math.sqrt(3) * v_real * i_raw
+                phi = math.acos(pf)
+                p_calc = s_va * math.cos(phi) / 1e6
+                q_calc = s_va * math.sin(phi) / 1e6
+
+                if _measurement_trusted(v_raw, i_raw):
+                    p_mw = p_calc
+                    q_mvar = q_calc
+                    last_pq_mw[bus] = p_mw
+                    last_q_mvar[bus] = q_mvar
+                else:
+                    p_mw = last_pq_mw[bus]
+                    q_mvar = last_q_mvar[bus]
+
+                p_nodes[bus].set_value(p_mw)
+                q_nodes[bus].set_value(q_mvar)
+                brk_fb_nodes[bus].set_value(int(breaker_fb))
+                snapshot_p[bus] = p_mw
+                snapshot_q[bus] = q_mvar
+                snapshot_brk[bus] = breaker_fb
+
+                cmd = command_nodes[bus].get_value()
+                cmd_val = 1 if int(cmd) == 1 else 0
+                breaker_cmd[bus] = cmd_val
+                ts_sent = timestamp()
+                context[0x00].setValues(1, BREAKER_CMD_BASE_ADDR + (bus - 1), [cmd_val])
+                v_dt = float(v_dt_nodes[bus].get_value())
+
+                log_data_plane(
+                    "h3",
+                    {
+                        "cycle_id": cycle_id,
+                        "ts_received": ts_received,
+                        "ts_sent": ts_sent,
+                        "bus": bus,
+                        "V_received": f"{v_raw:.6f}",
+                        "I_received": f"{i_raw:.6f}",
+                        "P_sent": f"{p_mw:.6f}",
+                        "Q_sent": f"{q_mvar:.6f}",
+                        "breaker_actual": breaker_fb,
+                    },
+                )
+                print(
+                    f"[{ts}] [Bus {bus}] P={p_mw:.4f} MW Q={q_mvar:.4f} MVar "
+                    f"BRK_FB={breaker_fb} CMD={'CLOSE' if cmd_val == 1 else 'OPEN'} "
+                    f"V_DT={v_dt:.4f} pu"
+                )
+            except Exception as e:
+                print(f"[{ts}] [Bus {bus}] transfer gagal: {e}")
+
+            if cmd_val != last_breaker[bus]:
+                print(
+                    f"[{ts}] [Bus {bus}] Command breaker ke RTU: "
+                    f"{'CLOSE' if cmd_val == 1 else 'OPEN'}"
+                )
+                last_breaker[bus] = cmd_val
+
+        try:
+            if cycle_id > 0 and cycle_id != last_snapshot_cycle and len(snapshot_p) == NUM_BUS:
+                data_history.append(
+                    {
+                        "cycle_id": int(cycle_id),
+                        "p": {str(bus): snapshot_p[bus] for bus in range(1, NUM_BUS + 1)},
+                        "q": {str(bus): snapshot_q[bus] for bus in range(1, NUM_BUS + 1)},
+                        "brk": {str(bus): snapshot_brk[bus] for bus in range(1, NUM_BUS + 1)},
+                    }
+                )
+                del data_history[:-DATA_HISTORY_MAX]
+                data_queue_node.set_value(json.dumps(data_history, separators=(",", ":")))
+                last_snapshot_cycle = cycle_id
+
+            context[0x00].setValues(3, CMD_ID_ADDR, [int(cmd_id)])
+            context[0x00].setValues(3, ORIGIN_CYCLE_ADDR, [int(origin_cycle)])
+            log_control_plane(
+                "h3",
+                {
+                    "cmd_id": cmd_id,
+                    "origin_cycle": origin_cycle,
+                    "ts_received": control_ts_received,
+                    "ts_sent": timestamp(),
+                    "breaker_DT": breaker_state(breaker_cmd),
+                },
+            )
+        except Exception as e:
+            print(f"[{ts}] command metadata transfer gagal: {e}")
+
+        elapsed = time.monotonic() - t_iter
+        remain = LOOP_INTERVAL_S - elapsed
+        if remain > 0:
+            time.sleep(remain)
+
+except KeyboardInterrupt:
+    print("Server dihentikan oleh user")
+    server.stop()

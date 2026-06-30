@@ -1,0 +1,10 @@
+# Mininet and command-line tools are system packages; see README.md.
+Jinja2==3.1.4
+PyYAML==6.0.2
+matplotlib==3.8.4
+numpy==1.26.4
+pandas==2.2.3
+scipy==1.13.1
+pandapower==2.14.11
+pymodbus==3.6.9
+opcua==0.98.13
