@@ -220,4 +220,4 @@ TwinRange-SG is intended only for cybersecurity research, education, and control
 
 ## License
 
-This project is released under the Apache License 2.0. See `LICENSE.txt` for details.
+This project is released under the Apache License 2.0. See [`LICENSE.txt`](https://github.com/rizkyAlya/TwinRange-SG/blob/main/LICENSE) for details.
