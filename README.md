@@ -86,21 +86,34 @@ python scripts/analyze_results.py --input results/ --output results/summary/
 
 ## Run experiments
 
-Each experiment is defined by a YAML configuration file under `configs/experiments/`. The run command validates the selected configuration, generates the Mininet topology and host applications, and executes the complete scenario.
+Each experiment is defined by a YAML configuration file under `configs/experiments/`. The run command validates the selected configuration, generates the Mininet topology and host applications, and then executes the selected scenario.
 
-Run the predefined scenarios:
+You can run experiments in two ways: individually or all at once.
+
+### Run a single experiment
+
+Use `--config` to run one specific experiment recipe:
 
 ```bash
 sudo .venv/bin/python scripts/run_experiment.py --config configs/experiments/baseline.yaml
+```
+
+Other predefined scenarios can be run in the same way:
+
+```bash
 sudo .venv/bin/python scripts/run_experiment.py --config configs/experiments/mitm.yaml
 sudo .venv/bin/python scripts/run_experiment.py --config configs/experiments/dos.yaml
 ```
 
-Run every recipe under `configs/experiments/` sequentially:
+### Run all predefined experiments
+
+Use `--all` to run every experiment recipe under `configs/experiments/` sequentially:
 
 ```bash
 sudo .venv/bin/python scripts/run_experiment.py --all
 ```
+
+This command runs all available experiment configurations one by one and stores the raw outputs under `results/raw/`.
 
 Validate a configuration without Mininet or root access:
 
