@@ -120,7 +120,7 @@ def read_network(root: Path, consumed: set[Path]) -> list[dict]:
                 continue
             for path in sorted(network_root.rglob(filename)):
                 scenario = scenario_from_path(path, root)
-                if scenario is None:
+                if scenario not in SCENARIO_ORDER:
                     continue
                 consumed.add(path)
                 with path.open("r", newline="", encoding="utf-8-sig") as handle:
@@ -184,7 +184,7 @@ def read_telemetry(root: Path, consumed: set[Path]) -> tuple[list[dict], list[di
             if not dt_path.is_file():
                 continue
             scenario = scenario_from_path(field_path, root)
-            if scenario is None:
+            if scenario not in SCENARIO_ORDER:
                 continue
             field_rows = read_csv_index(field_path, ("cycle_id", "bus"))
             dt_rows = read_csv_index(dt_path, ("cycle_id", "bus"))
@@ -525,7 +525,11 @@ def plot_network_bars(rows: list[dict], metric: str, output: Path) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    selected = [row for row in rows if row["metric"] == metric]
+    selected = [
+        row
+        for row in rows
+        if row["metric"] == metric and row["scenario"] in SCENARIO_ORDER
+    ]
     if not selected:
         return
 
@@ -736,7 +740,11 @@ def plot_voltage_drift(rows: list[dict], metric: str, output: Path) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    selected = [row for row in rows if row["metric"] == metric]
+    selected = [
+        row
+        for row in rows
+        if row["metric"] == metric and row["scenario"] in SCENARIO_ORDER
+    ]
     if not selected:
         return
 
