@@ -203,7 +203,7 @@ def clear_mininet_mitm_trace_state(net):
 
 
 def publish_run_root_on_hosts(net, run_root_abs: str):
-    """Tulis path absolut root sesi logs/<baseline|mitm|dos>/<run_id>/ di setiap host untuk trace CSV."""
+    """Tulis path absolut results/raw/<scenario>/<run_id>/ untuk trace CSV host."""
     path = os.path.abspath(run_root_abs)
     snippet = f"open({repr(RUN_ROOT_HOST_FILE)},'w',encoding='utf-8').write({repr(path)})"
     arg = shlex.quote(snippet)
@@ -259,6 +259,11 @@ def write_session_meta(
                 "measurement_window_s": MEASUREMENT_WINDOW_S,
                 "measurement_app_warmup_s": MEASUREMENT_APP_WARMUP_S,
                 "pcap_dir": pcap_dir,
+                "output_layout": {
+                    "host_csv": "host_csv",
+                    "network": "network",
+                    "pcap": "pcap",
+                },
                 "experiment_config": {
                     "file": os.path.basename(experiment_config_path)
                     if experiment_config_path
@@ -282,6 +287,20 @@ def write_session_meta(
             f,
             indent=2,
         )
+
+
+def prepare_session_layout(results_root: str, scenario: str, run_id_str: str) -> dict:
+    """Buat layout konsisten results/raw/<scenario>/<run_id> untuk satu sesi."""
+    session_root = os.path.join(results_root, scenario, run_id_str)
+    paths = {
+        "root": session_root,
+        "host_csv": os.path.join(session_root, "host_csv"),
+        "network": os.path.join(session_root, "network"),
+        "pcap": os.path.join(session_root, "pcap"),
+    }
+    for path in paths.values():
+        os.makedirs(path, exist_ok=True)
+    return paths
 
 
 def initial_trace_session_root(path_baseline, path_mitm, path_dos, args):
@@ -619,24 +638,28 @@ def main():
     )
     # Baseline collection hanya saat diminta eksplisit.
     should_collect_baseline = bool(args.baseline)
-    # logs/<baseline|mitm|dos>/<timestamp>/ per skenario (satu run_id untuk korelasi antar mode).
+    # results/raw/<baseline|mitm|dos>/<run_id>/ per skenario.
     should_create_run_folder = bool(args.baseline or args.mitm or args.dos)
     run_id_str = None
     path_baseline = path_mitm = path_dos = None
-    pcap_dir = None
+    pcap_baseline = pcap_mitm = pcap_dos = None
     if should_create_run_folder:
         run_id_str = datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
-        if not args.no_pcap:
-            pcap_dir = os.path.join(results_root, "pcap", run_id_str)
         if args.baseline:
-            path_baseline = os.path.join(results_root, "baseline", run_id_str)
-            write_session_meta(path_baseline, run_id_str, args, pcap_dir)
+            baseline_layout = prepare_session_layout(results_root, "baseline", run_id_str)
+            path_baseline = baseline_layout["root"]
+            pcap_baseline = None if args.no_pcap else baseline_layout["pcap"]
+            write_session_meta(path_baseline, run_id_str, args, pcap_baseline)
         if args.mitm:
-            path_mitm = os.path.join(results_root, "mitm", run_id_str)
-            write_session_meta(path_mitm, run_id_str, args, pcap_dir)
+            mitm_layout = prepare_session_layout(results_root, "mitm", run_id_str)
+            path_mitm = mitm_layout["root"]
+            pcap_mitm = None if args.no_pcap else mitm_layout["pcap"]
+            write_session_meta(path_mitm, run_id_str, args, pcap_mitm)
         if args.dos:
-            path_dos = os.path.join(results_root, "dos", run_id_str)
-            write_session_meta(path_dos, run_id_str, args, pcap_dir)
+            dos_layout = prepare_session_layout(results_root, "dos", run_id_str)
+            path_dos = dos_layout["root"]
+            pcap_dos = None if args.no_pcap else dos_layout["pcap"]
+            write_session_meta(path_dos, run_id_str, args, pcap_dos)
         log_lines = []
         if path_baseline:
             log_lines.append(f"baseline -> {path_baseline}")
@@ -651,21 +674,36 @@ def main():
     print(f"Baseline: {'ON' if should_collect_baseline else 'OFF'}")
     print(f"MITM: {'ON' if args.mitm else 'OFF'}")
     print(f"DoS : {'ON' if args.dos else 'OFF'}")
-    print(
-        f"PCAP: {'OFF (--no-pcap)' if args.no_pcap else ('ON -> ' + pcap_dir if pcap_dir else 'OFF (no scenario flags)')}"
-    )
+    enabled_pcap_dirs = [
+        path for path in (pcap_baseline, pcap_mitm, pcap_dos) if path is not None
+    ]
+    if args.no_pcap:
+        print("PCAP: OFF (--no-pcap)")
+    elif enabled_pcap_dirs:
+        print("PCAP:\n  " + "\n  ".join(enabled_pcap_dirs))
+    else:
+        print("PCAP: OFF (no scenario flags)")
     print("==============================\n")
 
     # Hindari marker fase/attack lama ikut terbaca oleh logger pada run baru.
     reset_attack_flags()
-    attacker_log_run_key = run_id_str or datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
-    attacker_log_dir = os.path.join(results_root, "host", attacker_log_run_key)
-    print(f"Attacker log path: {os.path.join(attacker_log_dir, 'h5.log')}")
+    attacker_log_dir_mitm = (
+        os.path.join(path_mitm, "host_csv", "attacker") if path_mitm else None
+    )
+    attacker_log_dir_dos = (
+        os.path.join(path_dos, "host_csv", "attacker") if path_dos else None
+    )
+    if attacker_log_dir_mitm:
+        print(f"MITM attacker log: {os.path.join(attacker_log_dir_mitm, 'h5.log')}")
+    if attacker_log_dir_dos:
+        print(f"DoS attacker log: {os.path.join(attacker_log_dir_dos, 'h5.log')}")
 
     # Topologi selalu berasal dari generated/topology.py hasil generator atau file statis saat ini.
     print("Starting generated topology...")
     net = None
-    pcap_manifest = None
+    pcap_manifests = {
+        path: [] for path in enabled_pcap_dirs
+    }
     try:
         net, topology_mod = create_network_from_generated_topology()
         net.start()
@@ -684,11 +722,8 @@ def main():
         # Service host harus hidup sebelum baseline/attack karena logger berada di app masing-masing.
         start_apps(net)
 
-        pcap_manifest = [] if pcap_dir else None
-        if pcap_dir:
-            print(
-                f"PCAP per iterasi (N={MEASUREMENT_ITERATIONS}) -> {pcap_dir}"
-            )
+        for pcap_path in enabled_pcap_dirs:
+            print(f"PCAP per iterasi (N={MEASUREMENT_ITERATIONS}) -> {pcap_path}")
 
         # Baseline hanya dikumpulkan bila diminta eksplisit.
         if should_collect_baseline:
@@ -700,9 +735,9 @@ def main():
             run_measurement_iterations(
                 net,
                 "baseline",
-                pcap_dir=pcap_dir,
+                pcap_dir=pcap_baseline,
                 pcap_phase="baseline",
-                pcap_manifest=pcap_manifest,
+                pcap_manifest=pcap_manifests.get(pcap_baseline),
                 collect_fn=lambda iteration: collect_data(
                     net,
                     mode="baseline",
@@ -726,14 +761,14 @@ def main():
                 time.sleep(1)
             if path_mitm:
                 publish_run_root_on_hosts(net, path_mitm)
-            run_mitm(net, attacker_log_dir)
+            run_mitm(net, attacker_log_dir_mitm)
             run_measurement_iterations(
                 net,
                 "MITM",
-                pcap_dir=pcap_dir,
+                pcap_dir=pcap_mitm,
                 pcap_phase="mitm",
                 include_mitm_eth1=True,
-                pcap_manifest=pcap_manifest,
+                pcap_manifest=pcap_manifests.get(pcap_mitm),
                 collect_fn=lambda iteration: collect_data(
                     net,
                     mode="mitm",
@@ -754,15 +789,15 @@ def main():
             # Untuk DoS, tiap mode attack dinyalakan lalu metrik diambil dalam window iterasi.
             for dos_mode in args.dos_modes:
                 phase_label = f"dos_{dos_mode}"
-                ok = run_dos(net, dos_mode, attacker_log_dir)
+                ok = run_dos(net, dos_mode, attacker_log_dir_dos)
                 if not ok:
                     continue
                 run_measurement_iterations(
                     net,
                     f"DoS ({dos_mode})",
-                    pcap_dir=pcap_dir,
+                    pcap_dir=pcap_dos,
                     pcap_phase=phase_label,
-                    pcap_manifest=pcap_manifest,
+                    pcap_manifest=pcap_manifests.get(pcap_dos),
                     host_csv_phase=phase_label,
                     collect_fn=lambda iteration, mode=dos_mode, label=phase_label: collect_data(
                         net,
@@ -785,8 +820,9 @@ def main():
         if not args.no_cli:
             CLI(net)
     finally:
-        if net is not None and pcap_dir and pcap_manifest is not None:
-            stop_any_running_captures(net, pcap_manifest)
+        if net is not None:
+            for manifest in pcap_manifests.values():
+                stop_any_running_captures(net, manifest)
         if net is not None:
             print("Stopping network...")
             net.stop()

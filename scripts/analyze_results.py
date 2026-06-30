@@ -13,6 +13,7 @@ import statistics
 
 
 SCENARIO_ORDER = ["baseline", "mitm", "dos_light", "dos_heavy"]
+SCENARIO_DIRECTORIES = ("baseline", "mitm", "dos")
 SCENARIO_LABELS = {
     "baseline": "Baseline",
     "mitm": "MITM",
@@ -53,6 +54,17 @@ def raw_root(input_path: Path) -> Path:
     return nested if nested.is_dir() else input_path
 
 
+def iter_run_roots(root: Path):
+    """Yield only results/raw/<scenario>/<run_id> directories from the canonical layout."""
+    for scenario in SCENARIO_DIRECTORIES:
+        scenario_root = root / scenario
+        if not scenario_root.is_dir():
+            continue
+        for run_root in sorted(scenario_root.iterdir()):
+            if run_root.is_dir():
+                yield scenario, run_root
+
+
 def scenario_from_path(path: Path, root: Path) -> str | None:
     try:
         parts = [part.lower() for part in path.relative_to(root).parts]
@@ -85,30 +97,32 @@ def read_network(root: Path, consumed: set[Path]) -> list[dict]:
     grouped: dict[tuple, list[float]] = defaultdict(list)
     units = {}
     for filename, (metric, value_column, unit) in NETWORK_FILES.items():
-        for path in sorted(root.rglob(filename)):
-            if "network" not in [part.lower() for part in path.parts]:
+        for _, run_root in iter_run_roots(root):
+            network_root = run_root / "network"
+            if not network_root.is_dir():
                 continue
-            scenario = scenario_from_path(path, root)
-            if scenario is None:
-                continue
-            consumed.add(path)
-            with path.open("r", newline="", encoding="utf-8-sig") as handle:
-                for row in csv.DictReader(handle):
-                    if filename == "throughput.csv" and row.get("status", "ok") != "ok":
-                        continue
-                    try:
-                        value = float(row[value_column])
-                    except (KeyError, TypeError, ValueError):
-                        continue
-                    key = (
-                        scenario,
-                        metric,
-                        row.get("layer", "unknown"),
-                        row.get("source", ""),
-                        row.get("destination", ""),
-                    )
-                    grouped[key].append(value)
-                    units[metric] = unit
+            for path in sorted(network_root.rglob(filename)):
+                scenario = scenario_from_path(path, root)
+                if scenario is None:
+                    continue
+                consumed.add(path)
+                with path.open("r", newline="", encoding="utf-8-sig") as handle:
+                    for row in csv.DictReader(handle):
+                        if filename == "throughput.csv" and row.get("status", "ok") != "ok":
+                            continue
+                        try:
+                            value = float(row[value_column])
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        key = (
+                            scenario,
+                            metric,
+                            row.get("layer", "unknown"),
+                            row.get("source", ""),
+                            row.get("destination", ""),
+                        )
+                        grouped[key].append(value)
+                        units[metric] = unit
 
     rows = []
     for key, values in sorted(grouped.items()):
@@ -140,39 +154,45 @@ def read_csv_index(path: Path, columns: tuple[str, str]) -> dict[tuple[str, str]
 
 def read_telemetry(root: Path, consumed: set[Path]) -> list[dict]:
     grouped: dict[tuple[str, str, str], list[float]] = defaultdict(list)
-    for field_path in sorted(root.rglob("h1.csv")):
-        lower_parts = [part.lower() for part in field_path.parts]
-        if "host_csv" not in lower_parts or "data_plane" not in lower_parts:
+    for _, run_root in iter_run_roots(root):
+        host_csv_root = run_root / "host_csv"
+        if not host_csv_root.is_dir():
             continue
-        dt_path = field_path.with_name("h4.csv")
-        if not dt_path.is_file():
-            continue
-        scenario = scenario_from_path(field_path, root)
-        if scenario is None:
-            continue
-        field_rows = read_csv_index(field_path, ("cycle_id", "bus"))
-        dt_rows = read_csv_index(dt_path, ("cycle_id", "bus"))
-        consumed.update((field_path, dt_path))
-        for key in sorted(field_rows.keys() & dt_rows.keys()):
-            field_row = field_rows[key]
-            dt_row = dt_rows[key]
-            try:
-                sent_voltage = float(field_row["V_sent"])
-                dt_voltage = float(dt_row["V_DT"])
-                sent_time = float(field_row["ts_sent"])
-                received_time = float(dt_row["ts_received"])
-            except (KeyError, TypeError, ValueError):
+        for field_path in sorted(host_csv_root.rglob("h1.csv")):
+            lower_parts = [part.lower() for part in field_path.parts]
+            if "data_plane" not in lower_parts:
                 continue
-            line = (dt_row.get("line") or "").strip()
-            if not line:
+            dt_path = field_path.with_name("h4.csv")
+            if not dt_path.is_file():
                 continue
-            absolute_error = abs(dt_voltage - sent_voltage)
-            grouped[(scenario, line, "voltage_abs_error_pu")].append(absolute_error)
-            if abs(sent_voltage) > 1e-12:
-                grouped[(scenario, line, "voltage_abs_error_pct")].append(
-                    absolute_error / abs(sent_voltage) * 100.0
+            scenario = scenario_from_path(field_path, root)
+            if scenario is None:
+                continue
+            field_rows = read_csv_index(field_path, ("cycle_id", "bus"))
+            dt_rows = read_csv_index(dt_path, ("cycle_id", "bus"))
+            consumed.update((field_path, dt_path))
+            for key in sorted(field_rows.keys() & dt_rows.keys()):
+                field_row = field_rows[key]
+                dt_row = dt_rows[key]
+                try:
+                    sent_voltage = float(field_row["V_sent"])
+                    dt_voltage = float(dt_row["V_DT"])
+                    sent_time = float(field_row["ts_sent"])
+                    received_time = float(dt_row["ts_received"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                line = (dt_row.get("line") or "").strip()
+                if not line:
+                    continue
+                absolute_error = abs(dt_voltage - sent_voltage)
+                grouped[(scenario, line, "voltage_abs_error_pu")].append(absolute_error)
+                if abs(sent_voltage) > 1e-12:
+                    grouped[(scenario, line, "voltage_abs_error_pct")].append(
+                        absolute_error / abs(sent_voltage) * 100.0
+                    )
+                grouped[(scenario, line, "aoi_s")].append(
+                    max(0.0, received_time - sent_time)
                 )
-            grouped[(scenario, line, "aoi_s")].append(max(0.0, received_time - sent_time))
 
     rows = []
     for (scenario, line, metric), values in sorted(grouped.items()):
@@ -305,7 +325,10 @@ def plot_summary_lines(rows: list[dict], metric: str, series_column: str, output
 
 def write_inventory(root: Path, output: Path, consumed: set[Path]) -> None:
     rows = []
-    for path in sorted(root.rglob("meta.json")):
+    for _, run_root in iter_run_roots(root):
+        path = run_root / "meta.json"
+        if not path.is_file():
+            continue
         scenario = scenario_from_path(path, root)
         if scenario is None:
             continue

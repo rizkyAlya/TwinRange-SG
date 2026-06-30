@@ -62,7 +62,7 @@ def _resolve_links_from_config(config_path):
 
 
 def _is_scenario_session_root(logs_path):
-    """True jika logs_path = logs/<baseline|mitm|dos>/<run_id>/ (satu sesi orchestrator)."""
+    """True untuk results/raw/<baseline|mitm|dos>/<run_id>/ dari orchestrator."""
     if not logs_path:
         return False
     parent = os.path.basename(os.path.dirname(os.path.abspath(logs_path)))
@@ -147,7 +147,7 @@ def collect_data(
     """
     Kumpulkan RTT, packet loss, dan throughput.
 
-    Unified (logs_path = logs/<baseline|mitm|dos>/<run_id>/): menyimpan di
+    Unified (logs_path = results/raw/<baseline|mitm|dos>/<run_id>/): menyimpan di
     .../network/baseline|mitm|dos/...
 
     measure_phase: jika diisi, kolom fase ditambahkan pada CSV (selaras trace).

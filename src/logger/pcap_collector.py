@@ -1,6 +1,7 @@
 """
 tcpdump per iterasi pengukuran trace (selaras iterasi_ke di trace.csv).
-Output: logs/pcap/<timestamp>/<phase>/iterNN/<label>.pcap (+ manifest.json)
+Output: results/raw/<scenario>/<run_id>/pcap/<phase>/iterNN/<label>.pcap
+(+ manifest.json).
 """
 from __future__ import annotations
 
@@ -286,6 +287,6 @@ def stop_any_running_captures(net, manifest: List[Dict[str, Any]]) -> None:
         stop_trace_iteration_captures(net, running)
 
 
-def pcap_session_dir(base_dir: str, run_id: str) -> str:
-    """Folder PCAP sesi mengikuti run_id orchestrator."""
-    return os.path.join(base_dir, "logs", "pcap", run_id)
+def pcap_session_dir(session_root: str) -> str:
+    """Folder PCAP di dalam results/raw/<scenario>/<run_id>."""
+    return os.path.join(session_root, "pcap")

@@ -121,8 +121,13 @@ results/
     <scenario_name>/
       <run_id>/
         meta.json
-        *.csv
-        *.pcap
+        host_csv/
+          [<phase>/]iteration_<n>/<plane>/*.csv
+        network/
+          <measurement_mode>/*.csv
+        pcap/
+          <phase>/iter<n>/*.pcap
+          [manifest.json]
 
   summary/
     run_inventory.csv
