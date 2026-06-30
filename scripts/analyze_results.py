@@ -26,9 +26,14 @@ NETWORK_FILES = {
     "throughput.csv": ("Throughput", "throughput_Mbps", "Mbps"),
 }
 TELEMETRY_METRICS = {
-    "voltage_abs_error_pu": ("DT Voltage Absolute Error", "p.u."),
-    "voltage_abs_error_pct": ("DT Voltage Absolute Error", "%"),
+    "voltage_abs_error_pu": ("DT Voltage Drift", "p.u."),
+    "voltage_abs_error_pct": ("DT Voltage Drift", "%"),
     "aoi_s": ("Age of Information", "s"),
+}
+NETWORK_PLOT_LABELS = {
+    "RTT": ("RTT Comparison", "Latency (ms)", "{:.2f}"),
+    "Packet Loss": ("Packet Loss Comparison", "Packet Loss (%)", "{:.2f}"),
+    "Throughput": ("Throughput Comparison", "Throughput (Mbps)", "{:.2f}"),
 }
 PLOT_COLORS = [
     "#6B8E9F",
@@ -232,6 +237,144 @@ def series_sort_key(name: str) -> tuple[int, int | str]:
         return 1, name
 
 
+def route_label(row: dict) -> str:
+    layer = str(row.get("layer", "unknown")).replace("_", " ").title()
+    return f"{layer} ({row.get('source', '')} -> {row.get('destination', '')})"
+
+
+def plot_network_bars(rows: list[dict], metric: str, output: Path) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    selected = [row for row in rows if row["metric"] == metric]
+    if not selected:
+        return
+
+    scenarios = sorted({row["scenario"] for row in selected}, key=scenario_sort_key)
+    routes = sorted(
+        {
+            (row["layer"], row["source"], row["destination"])
+            for row in selected
+        }
+    )
+    indexed = {
+        (row["scenario"], row["layer"], row["source"], row["destination"]): row
+        for row in selected
+    }
+    positions = list(range(len(scenarios)))
+    width = min(0.72 / max(1, len(routes)), 0.32)
+    title, ylabel, value_format = NETWORK_PLOT_LABELS.get(
+        metric,
+        (f"{metric} Comparison", f"{metric} ({selected[0]['unit']})", "{:.2f}"),
+    )
+
+    figure, axis = plt.subplots(figsize=(11, 6.2), dpi=160)
+    figure.patch.set_facecolor("#F8FAFC")
+    axis.set_facecolor("#FFFFFF")
+    bar_groups = []
+
+    for index, route in enumerate(routes):
+        means = []
+        errors = []
+        sample = None
+        for scenario in scenarios:
+            row = indexed.get((scenario, *route))
+            means.append(float(row["mean"]) if row else 0.0)
+            errors.append(float(row["std_dev"]) if row else 0.0)
+            sample = sample or row
+
+        x_values = [
+            position + (index - (len(routes) - 1) / 2) * width
+            for position in positions
+        ]
+        bars = axis.bar(
+            x_values,
+            means,
+            width,
+            yerr=errors,
+            capsize=5,
+            color=PLOT_COLORS[index % len(PLOT_COLORS)],
+            edgecolor="#334155",
+            linewidth=0.7,
+            error_kw={"elinewidth": 1.2, "ecolor": "#475569", "capthick": 1.2},
+            label=route_label(sample or {
+                "layer": route[0],
+                "source": route[1],
+                "destination": route[2],
+            }),
+        )
+        bar_groups.append((bars, means, errors))
+
+    max_value = max(
+        (mean + error for _bars, means, errors in bar_groups for mean, error in zip(means, errors)),
+        default=0.0,
+    )
+    y_top = max(1.0, max_value * 1.32)
+    axis.set_ylim(0, y_top)
+    label_offset = y_top * 0.012
+    for bars, means, errors in bar_groups:
+        for bar, mean, error in zip(bars, means, errors):
+            center = bar.get_x() + bar.get_width() / 2
+            mean_y = mean * 0.5 if mean > 0 else label_offset
+            error_y = mean + error + label_offset
+            if mean == 0 and error == 0:
+                error_y = label_offset * 3
+            axis.text(
+                center,
+                mean_y,
+                f"$\\mu$={value_format.format(mean)}",
+                ha="center",
+                va="center",
+                fontsize=8.2,
+                fontweight="semibold",
+                color="#0F172A",
+            )
+            axis.text(
+                center,
+                error_y,
+                f"$\\sigma$={value_format.format(error)}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                color="#334155",
+            )
+
+    axis.set_xticks(positions)
+    axis.set_xticklabels([SCENARIO_LABELS.get(name, name) for name in scenarios])
+    axis.set_xlabel("Test Scenario", fontsize=11, fontweight="semibold", color="#334155")
+    axis.set_ylabel(ylabel, fontsize=11, fontweight="semibold", color="#334155")
+    axis.set_title(title, fontsize=15, fontweight="bold", color="#0F172A", pad=14)
+    axis.grid(axis="y", linestyle="--", linewidth=0.8, alpha=0.45, color="#94A3B8")
+    axis.set_axisbelow(True)
+    axis.spines["top"].set_visible(False)
+    axis.spines["right"].set_visible(False)
+    axis.spines["left"].set_color("#CBD5E1")
+    axis.spines["bottom"].set_color("#CBD5E1")
+    axis.tick_params(axis="both", colors="#334155")
+    axis.legend(
+        title="Network Segment",
+        frameon=True,
+        facecolor="#FFFFFF",
+        edgecolor="#CBD5E1",
+        fontsize=9,
+        title_fontsize=10,
+        loc="upper left",
+    )
+    figure.text(
+        0.01,
+        0.015,
+        "Bars show mean values ($\\mu$); error bars and labels show standard deviation ($\\sigma$).",
+        fontsize=9,
+        color="#475569",
+    )
+    figure.tight_layout(rect=(0, 0.035, 1, 1))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output, bbox_inches="tight")
+    plt.close(figure)
+
+
 def plot_summary_lines(rows: list[dict], metric: str, series_column: str, output: Path) -> None:
     import matplotlib
 
@@ -413,7 +556,7 @@ def main() -> int:
                 f"{route_row['layer']} ({route_row['source']} -> {route_row['destination']})"
             )
         filename = metric.lower().replace(" ", "_") + ".png"
-        plot_summary_lines(route_rows, metric, "route", output_path / "figures" / filename)
+        plot_network_bars(route_rows, metric, output_path / "figures" / filename)
     for metric in sorted({row["metric"] for row in telemetry_rows}):
         plot_summary_lines(
             telemetry_rows,
