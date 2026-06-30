@@ -17,8 +17,7 @@ configs/
 scripts/                  Public run and analysis commands
 ```
 
-The generated `script/` and runtime `results/` directories are created automatically and are
-not tracked by Git.
+The generated `generated/` and runtime `results/` directories are created automatically and are not tracked by Git.
 
 ## Platform and installation
 
@@ -36,9 +35,7 @@ python -m pip install -r requirements.txt
 
 ## Run experiments
 
-Each command validates its YAML config, generates `script/topology.py`, all files under
-`script/apps/`, and `script/mitm/modbus_proxy.py`, then runs the complete scenario. Use the
-virtual environment's Python explicitly with `sudo` so the installed packages remain visible.
+Each command validates its YAML config, generates `generated/topology.py`, all files under `generated/apps/`, and `generated/mitm/modbus_proxy.py`, then runs the complete scenario. Use the virtual environment's Python explicitly with `sudo` so the installed packages remain visible.
 
 ```bash
 sudo .venv/bin/python scripts/run_experiment.py --config configs/experiments/baseline.yaml
@@ -52,9 +49,7 @@ Validate a config without Mininet or root access:
 python scripts/run_experiment.py --config configs/experiments/baseline.yaml --dry-run
 ```
 
-Raw CSV, metadata, and optional PCAP files are written under `results/raw/`. Every run's
-`meta.json` embeds the experiment config, its SHA-256 hash, generator hashes, seeds, and runtime
-platform information.
+Raw CSV, metadata, and optional PCAP files are written under `results/raw/`. Every run's `meta.json` embeds the experiment config, its SHA-256 hash, generator hashes, seeds, and runtime platform information.
 
 ## Analyze results
 
@@ -64,6 +59,4 @@ Run analysis without `sudo` after one or more scenarios have completed:
 python scripts/analyze_results.py --input results/ --output results/summary/
 ```
 
-The command creates network and Field–Digital Twin telemetry summaries, figures for RTT,
-packet loss, throughput, voltage error, and Age of Information, a run inventory, and an
-`analysis_manifest.json` containing hashes of all consumed inputs and produced outputs.
+The command creates network and Field–Digital Twin telemetry summaries, figures for RTT, packet loss, throughput, voltage error, and Age of Information, a run inventory, and an `analysis_manifest.json` containing hashes of all consumed inputs and produced outputs.

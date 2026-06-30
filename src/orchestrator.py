@@ -18,7 +18,7 @@ from src.generator.generator import generate_project
 # Path inti proyek dan marker /tmp yang dibaca oleh host di dalam namespace Mininet.
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.abspath(os.path.join(PACKAGE_DIR, ".."))
-OUTPUT_DIR = os.path.join(BASE_DIR, "script")
+OUTPUT_DIR = os.path.join(BASE_DIR, "generated")
 APPS_DIR = os.path.join(OUTPUT_DIR, "apps")
 TOPOLOGY_PATH = os.path.join(OUTPUT_DIR, "topology.py")
 GENERATION_MANIFEST_PATH = os.path.join(OUTPUT_DIR, "generation_manifest.json")
@@ -348,12 +348,12 @@ def load_topology_module():
 def create_network_from_generated_topology():
     """
     Use generated topology output directly (do not rebuild from config).
-    Expected API in script/topology.py: create_network()
+    Expected API in generated/topology.py: create_network()
     """
     topology_mod = load_topology_module()
     if not hasattr(topology_mod, "create_network"):
         raise AttributeError(
-            "script/topology.py does not expose create_network(). "
+            "generated/topology.py does not expose create_network(). "
             "Update topology template to provide create_network() that returns a Mininet object."
         )
     return topology_mod.create_network(), topology_mod
@@ -462,12 +462,12 @@ def run_mitm(net, attacker_log_dir):
     attacker_module = load_generated_attacker_module()
 
     if attacker_module is None:
-        print("Attacker module not found (script/apps/h5.py)")
+        print("Attacker module not found (generated/apps/h5.py)")
         return False
 
     run_mitm_attack = getattr(attacker_module, "run_mitm_attack", None)
     if run_mitm_attack is None:
-        print("MITM function not found (script/apps/h5.py::run_mitm_attack)")
+        print("MITM function not found (generated/apps/h5.py::run_mitm_attack)")
         return False
 
     try:
@@ -485,12 +485,12 @@ def run_dos(net, mode, attacker_log_dir):
     attacker_module = load_generated_attacker_module()
 
     if attacker_module is None:
-        print("Attacker module not found (script/apps/h5.py)")
+        print("Attacker module not found (generated/apps/h5.py)")
         return False
 
     run_dos_attack = getattr(attacker_module, "run_dos_attack", None)
     if run_dos_attack is None:
-        print("DoS function not found (script/apps/h5.py::run_dos_attack)")
+        print("DoS function not found (generated/apps/h5.py::run_dos_attack)")
         return False
 
     try:
@@ -549,7 +549,7 @@ def main():
     parser.add_argument(
         "--dos",
         action="store_true",
-        help="Run DoS scenario after apps started (requires script/apps/h5.py)"
+        help="Run DoS scenario after apps started (requires generated/apps/h5.py)"
     )
     parser.add_argument(
         "--mitm",
@@ -662,7 +662,7 @@ def main():
     attacker_log_dir = os.path.join(results_root, "host", attacker_log_run_key)
     print(f"Attacker log path: {os.path.join(attacker_log_dir, 'h5.log')}")
 
-    # Topologi selalu berasal dari script/topology.py hasil generator atau file statis saat ini.
+    # Topologi selalu berasal dari generated/topology.py hasil generator atau file statis saat ini.
     print("Starting generated topology...")
     net = None
     pcap_manifest = None

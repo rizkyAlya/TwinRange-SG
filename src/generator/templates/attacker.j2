@@ -44,10 +44,10 @@ def _iptables_dnat_modbus(attacker, attacker_name: str, gateway_ip: str, enable:
         )
 
 def _run_mitm_proxy_entrypoint():
-    """Muat proxy Modbus yang disalin generator ke script/mitm/modbus_proxy.py."""
+    """Muat proxy Modbus yang disalin generator ke generated/mitm/modbus_proxy.py."""
     import importlib.util
 
-    path = os.path.join(BASE_DIR, "script", "mitm", "modbus_proxy.py")
+    path = os.path.join(BASE_DIR, "generated", "mitm", "modbus_proxy.py")
     spec = importlib.util.spec_from_file_location("modbus_proxy", path)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

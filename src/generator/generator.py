@@ -1,4 +1,4 @@
-# Generator membaca topology.yaml dan membuat script/topology.py serta app host dari template Jinja.
+# Generator membaca topology.yaml dan membuat generated/topology.py serta app host dari template Jinja.
 # Folder templates sengaja tidak diberi komentar sesuai permintaan.
 import os
 import yaml
@@ -11,7 +11,7 @@ PACKAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 PROJECT_ROOT = os.path.abspath(os.path.join(PACKAGE_DIR, ".."))
 TEMPLATE_DIR = os.path.join(PACKAGE_DIR, "generator", "templates")
 STATIC_DIR = os.path.join(PACKAGE_DIR, "generator", "static")
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "script")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "generated")
 
 # Environment Jinja diarahkan hanya ke generator/templates.
 env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), keep_trailing_newline=True)
